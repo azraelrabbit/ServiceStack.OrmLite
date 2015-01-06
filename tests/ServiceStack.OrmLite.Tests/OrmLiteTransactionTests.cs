@@ -14,7 +14,7 @@ namespace ServiceStack.OrmLite.Tests
 		[Test]
 		public void Transaction_commit_persists_data_to_the_db()
 		{
-			using (var db = Config.OpenDbConnection())
+			using (var db = OpenDbConnection())
 			{
 				db.DropAndCreateTable<ModelWithIdAndName>();
 				db.Insert(new ModelWithIdAndName(1));
@@ -38,8 +38,8 @@ namespace ServiceStack.OrmLite.Tests
 		[Test]
 		public void Transaction_rollsback_if_not_committed()
 		{
-            using (var db = Config.OpenDbConnection())
-			{
+            using (var db = OpenDbConnection())
+            {
                 db.DropAndCreateTable<ModelWithIdAndName>();
 				db.Insert(new ModelWithIdAndName(1));
 
@@ -60,8 +60,8 @@ namespace ServiceStack.OrmLite.Tests
 		[Test]
 		public void Transaction_rollsback_transactions_to_different_tables()
 		{
-            using (var db = Config.OpenDbConnection())
-			{
+            using (var db = OpenDbConnection())
+            {
                 db.DropAndCreateTable<ModelWithIdAndName>();
                 db.DropAndCreateTable<ModelWithFieldsOfDifferentTypes>();
                 db.DropAndCreateTable<ModelWithOnlyStringFields>();
@@ -88,8 +88,8 @@ namespace ServiceStack.OrmLite.Tests
 		[Test]
 		public void Transaction_commits_inserts_to_different_tables()
 		{
-            using (var db = Config.OpenDbConnection())
-			{
+            using (var db = OpenDbConnection())
+            {
                 db.DropAndCreateTable<ModelWithIdAndName>();
                 db.DropAndCreateTable<ModelWithFieldsOfDifferentTypes>();
                 db.DropAndCreateTable<ModelWithOnlyStringFields>();
@@ -114,12 +114,12 @@ namespace ServiceStack.OrmLite.Tests
 				Assert.That(db.Select<ModelWithOnlyStringFields>(), Has.Count.EqualTo(1));
 			}
 		}
-        
-        class MyTable
+
+	    public class MyTable
         {
             [AutoIncrement]
             public int Id { get; set; }
-            public String SomeTextField { get; set; }
+            public string SomeTextField { get; set; }
         }
 
         [Test]
@@ -192,6 +192,58 @@ namespace ServiceStack.OrmLite.Tests
             catch (Exception e)
             {
                 Assert.Fail("Test 3 Failed: {0}".Fmt(e.Message));
+            }
+        }
+
+	    [Test]
+	    public void Does_allow_setting_transactions_on_raw_DbCommands()
+	    {
+            using (var db = OpenDbConnection())
+            {
+                db.DropAndCreateTable<MyTable>();
+
+                using (var trans = db.OpenTransaction())
+                {
+                    db.Insert(new MyTable { SomeTextField = "Example" });
+
+                    using (var dbCmd = db.CreateCommand())
+                    {
+                        dbCmd.Transaction = trans.ToDbTransaction();
+
+                        dbCmd.CommandText = "INSERT INTO {0} ({1}) VALUES ('From OrmLite DB Command')"
+                            .Fmt("MyTable".SqlTable(), "SomeTextField".SqlColumn());
+                        dbCmd.ExecuteNonQuery();
+                    }
+
+                    trans.Commit();
+                }
+
+                Assert.That(db.Count<MyTable>(), Is.EqualTo(2));
+            }
+        }
+
+	    [Test]
+	    public void Can_use_OpenCommand_in_Transaction()
+	    {
+            using (var db = OpenDbConnection())
+            {
+                db.DropAndCreateTable<MyTable>();
+
+                using (var trans = db.OpenTransaction())
+                {
+                    db.Insert(new MyTable { SomeTextField = "Example" });
+
+                    using (var dbCmd = db.OpenCommand())
+                    {
+                        dbCmd.CommandText = "INSERT INTO {0} ({1}) VALUES ('From OrmLite DB Command')"
+                            .Fmt("MyTable".SqlTable(), "SomeTextField".SqlColumn());
+                        dbCmd.ExecuteNonQuery();
+                    }
+
+                    trans.Commit();
+                }
+
+                Assert.That(db.Count<MyTable>(), Is.EqualTo(2));
             }
         }
  

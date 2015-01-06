@@ -13,6 +13,8 @@ using System;
 using System.Collections.Generic;
 using System.Data;
 using System.Linq.Expressions;
+using System.Threading;
+using System.Threading.Tasks;
 using ServiceStack.Text;
 
 namespace ServiceStack.OrmLite
@@ -84,6 +86,8 @@ namespace ServiceStack.OrmLite
 
         bool PrepareParameterizedDeleteStatement<T>(IDbCommand cmd, ICollection<string> deleteFields = null);
 
+        void PrepareStoredProcedureStatement<T>(IDbCommand cmd, T obj);
+
         void SetParameterValues<T>(IDbCommand dbCmd, object obj);
 
         Dictionary<string, FieldDefinition> GetFieldDefinitionMap(ModelDefinition modelDef);
@@ -145,5 +149,20 @@ namespace ServiceStack.OrmLite
                                                      string foreignKeyName = null);
         string ToCreateIndexStatement<T>(Expression<Func<T, object>> field,
                                          string indexName = null, bool unique = false);
+
+        //Async
+        Task OpenAsync(IDbConnection db, CancellationToken token = default(CancellationToken));
+        Task<IDataReader> ExecuteReaderAsync(IDbCommand cmd, CancellationToken token = default(CancellationToken));
+        Task<int> ExecuteNonQueryAsync(IDbCommand cmd, CancellationToken token = default(CancellationToken));
+        Task<object> ExecuteScalarAsync(IDbCommand cmd, CancellationToken token = default(CancellationToken));
+        Task<bool> ReadAsync(IDataReader reader, CancellationToken token = default(CancellationToken));
+        Task<List<T>> ReaderEach<T>(IDataReader reader, Func<T> fn, CancellationToken token = default(CancellationToken));
+        Task<Return> ReaderEach<Return>(IDataReader reader, Action fn, Return source, CancellationToken token = default(CancellationToken));
+        Task<T> ReaderRead<T>(IDataReader reader, Func<T> fn, CancellationToken token = default(CancellationToken));
+
+        Task<long> InsertAndGetLastInsertIdAsync<T>(IDbCommand dbCmd, CancellationToken token);
+    
+        string GetLoadChildrenSubSelect<From>(ModelDefinition modelDef, SqlExpression<From> expr);
+        string ToRowCountStatement(string innerSql);
     }
 }

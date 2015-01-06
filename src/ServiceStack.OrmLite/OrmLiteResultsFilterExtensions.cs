@@ -56,14 +56,20 @@ namespace ServiceStack.OrmLite
             if (sql != null)
                 dbCmd.CommandText = sql;
 
+            var isScalar = OrmLiteUtils.IsScalar<T>();
+
             if (OrmLiteConfig.ResultsFilter != null)
             {
-                return OrmLiteConfig.ResultsFilter.GetList<T>(dbCmd);
+                return isScalar
+                    ? OrmLiteConfig.ResultsFilter.GetColumn<T>(dbCmd)
+                    : OrmLiteConfig.ResultsFilter.GetList<T>(dbCmd);
             }
 
             using (var reader = dbCmd.ExecReader(dbCmd.CommandText))
             {
-                return reader.ConvertToList<T>();
+                return isScalar
+                    ? reader.Column<T>(dbCmd.GetDialectProvider())
+                    : reader.ConvertToList<T>(dbCmd.GetDialectProvider());
             }
         }
 
@@ -79,7 +85,7 @@ namespace ServiceStack.OrmLite
 
             using (var reader = dbCmd.ExecReader(dbCmd.CommandText))
             {
-                return reader.ConvertToList(refType);
+                return reader.ConvertToList(dbCmd.GetDialectProvider(), refType);
             }
         }
 
@@ -95,7 +101,7 @@ namespace ServiceStack.OrmLite
 
             using (var reader = dbCmd.ExecReader(dbCmd.CommandText))
             {
-                return reader.ExprConvertToList<T>();
+                return reader.ConvertToList<T>(dbCmd.GetDialectProvider());
             }
         }
 
@@ -111,7 +117,7 @@ namespace ServiceStack.OrmLite
 
             using (var reader = dbCmd.ExecReader(dbCmd.CommandText))
             {
-                return reader.ConvertTo<T>();
+                return reader.ConvertTo<T>(dbCmd.GetDialectProvider());
             }
         }
 
@@ -127,7 +133,7 @@ namespace ServiceStack.OrmLite
 
             using (var reader = dbCmd.ExecReader(dbCmd.CommandText))
             {
-                return reader.ConvertTo(refType);
+                return reader.ConvertTo(dbCmd.GetDialectProvider(), refType);
             }
         }
 
@@ -143,7 +149,7 @@ namespace ServiceStack.OrmLite
 
             using (var reader = dbCmd.ExecReader(dbCmd.CommandText))
             {
-                return reader.Scalar<T>();
+                return reader.Scalar<T>(dbCmd.GetDialectProvider());
             }
         }
 
@@ -160,7 +166,7 @@ namespace ServiceStack.OrmLite
             return dbCmd.ExecuteScalar();
         }
 
-        internal static long ExecLongScalar(this IDbCommand dbCmd, string sql = null)
+        public static long ExecLongScalar(this IDbCommand dbCmd, string sql = null)
         {
             if (sql != null)
                 dbCmd.CommandText = sql;
@@ -185,7 +191,7 @@ namespace ServiceStack.OrmLite
 
             using (var reader = dbCmd.ExecReader(dbCmd.CommandText))
             {
-                return reader.ExprConvertTo<T>();
+                return reader.ConvertTo<T>(dbCmd.GetDialectProvider());
             }
         }
 
@@ -201,7 +207,7 @@ namespace ServiceStack.OrmLite
 
             using (var reader = dbCmd.ExecReader(dbCmd.CommandText))
             {
-                return reader.Column<T>();
+                return reader.Column<T>(dbCmd.GetDialectProvider());
             }
         }
 
@@ -217,7 +223,7 @@ namespace ServiceStack.OrmLite
 
             using (var reader = dbCmd.ExecReader(dbCmd.CommandText))
             {
-                return reader.ColumnDistinct<T>();
+                return reader.ColumnDistinct<T>(dbCmd.GetDialectProvider());
             }
         }
 
@@ -233,7 +239,7 @@ namespace ServiceStack.OrmLite
 
             using (var reader = dbCmd.ExecReader(dbCmd.CommandText))
             {
-                return reader.Dictionary<K, V>();
+                return reader.Dictionary<K, V>(dbCmd.GetDialectProvider());
             }
         }
 
@@ -249,9 +255,8 @@ namespace ServiceStack.OrmLite
 
             using (var reader = dbCmd.ExecReader(dbCmd.CommandText))
             {
-                return reader.Lookup<K, V>();
+                return reader.Lookup<K, V>(dbCmd.GetDialectProvider());
             }
         }
-
     }
 }

@@ -5,8 +5,9 @@ using System.Data.SqlClient;
 using System.Globalization;
 using System.IO;
 using System.Text;
-using ServiceStack.Text;
-using ServiceStack;
+using System.Threading;
+using System.Threading.Tasks;
+using ServiceStack.Data;
 
 namespace ServiceStack.OrmLite.SqlServer
 {
@@ -108,7 +109,7 @@ namespace ServiceStack.OrmLite.SqlServer
                 var bytes = reader.GetValue(colIndex) as byte[];
                 if (bytes != null)
                 {
-                    var ulongValue = ConvertToULong(bytes);
+                    var ulongValue = OrmLiteUtils.ConvertToULong(bytes);
                     try
                     {
                         fieldDef.SetValueFn(instance, ulongValue);
@@ -280,7 +281,7 @@ namespace ServiceStack.OrmLite.SqlServer
                 {
                     var foreignKeyName = fieldDef.ForeignKey.GetForeignKeyName(
                         modelDef,
-                        GetModelDefinition(fieldDef.ForeignKey.ReferenceType),
+                        OrmLiteUtils.GetModelDefinition(fieldDef.ForeignKey.ReferenceType),
                         NamingStrategy,
                         fieldDef);
 
@@ -352,7 +353,8 @@ namespace ServiceStack.OrmLite.SqlServer
             var definition = base.GetColumnDefinition(fieldName, fieldType, isPrimaryKey, autoIncrement,
                 isNullable, isRowVersion, fieldLength, scale, defaultValue, customFieldDefinition);
 
-            if (fieldType == typeof(Decimal) && fieldLength != DefaultDecimalPrecision && scale != DefaultDecimalScale)
+            if (fieldType == typeof(Decimal) 
+                && (fieldLength != DefaultDecimalPrecision || scale != DefaultDecimalScale))
             {
                 string validDecimal = String.Format("DECIMAL({0},{1})",
                     fieldLength.GetValueOrDefault(DefaultDecimalPrecision),
@@ -407,7 +409,7 @@ namespace ServiceStack.OrmLite.SqlServer
                     throw new ApplicationException("Malformed model, no PrimaryKey defined");
 
                 orderByExpression = string.Format("ORDER BY {0}",
-                    OrmLiteConfig.DialectProvider.GetQuotedColumnName(modelDef, modelDef.PrimaryKey));
+                    this.GetQuotedColumnName(modelDef, modelDef.PrimaryKey));
             }
 
             var ret = string.Format(
@@ -459,5 +461,113 @@ namespace ServiceStack.OrmLite.SqlServer
             var sqlSelect = selectToken[0] + " " + sb.ToString().Trim();
             return sqlSelect;
         }
+
+        public override string GetLoadChildrenSubSelect<From>(ModelDefinition modelDef, SqlExpression<From> expr)
+        {
+            if (!expr.OrderByExpression.IsNullOrEmpty() && expr.Rows == null)
+            {
+                expr.Select(this.GetQuotedColumnName(modelDef, modelDef.PrimaryKey))
+                    .ClearLimits()
+                    .OrderBy(""); //Invalid in Sub Selects
+
+                var subSql = expr.ToSelectStatement();
+
+                return subSql;
+            }
+            
+            return base.GetLoadChildrenSubSelect(modelDef, expr);
+        }
+
+        protected SqlConnection Unwrap(IDbConnection db)
+        {
+            return (SqlConnection)db.ToDbConnection();
+        }
+
+        protected SqlCommand Unwrap(IDbCommand cmd)
+        {
+            return (SqlCommand) cmd.ToDbCommand();
+        }
+
+        protected SqlDataReader Unwrap(IDataReader reader)
+        {
+            return (SqlDataReader)reader;
+        }
+
+#if NET45
+        public override Task OpenAsync(IDbConnection db, CancellationToken token)
+        {
+            return Unwrap(db).OpenAsync(token);
+        }
+
+        public override Task<IDataReader> ExecuteReaderAsync(IDbCommand cmd, CancellationToken token)
+        {
+            return Unwrap(cmd).ExecuteReaderAsync(token).Then(x => (IDataReader)x);
+        }
+
+        public override Task<int> ExecuteNonQueryAsync(IDbCommand cmd, CancellationToken token)
+        {
+            return Unwrap(cmd).ExecuteNonQueryAsync(token);
+        }
+
+        public override Task<object> ExecuteScalarAsync(IDbCommand cmd, CancellationToken token)
+        {
+            return Unwrap(cmd).ExecuteScalarAsync(token);
+        }
+
+        public override Task<bool> ReadAsync(IDataReader reader, CancellationToken token)
+        {
+            return Unwrap(reader).ReadAsync(token);
+        }
+
+        public override async Task<List<T>> ReaderEach<T>(IDataReader reader, Func<T> fn, CancellationToken token)
+        {
+            try
+            {
+                var to = new List<T>();
+                while (await ReadAsync(reader, token).ConfigureAwait(false))
+                {
+                    var row = fn();
+                    to.Add(row);
+                }
+                return to;
+            }
+            finally
+            {
+                reader.Dispose();
+            }
+        }
+
+        public override async Task<Return> ReaderEach<Return>(IDataReader reader, Action fn, Return source, CancellationToken token)
+        {
+            try
+            {
+                while (await ReadAsync(reader, token).ConfigureAwait(false))
+                {
+                    fn();
+                }
+                return source;
+            }
+            finally
+            {
+                reader.Dispose();
+            }
+        }
+
+        public override async Task<T> ReaderRead<T>(IDataReader reader, Func<T> fn, CancellationToken token)
+        {
+            try
+            {
+                if (await ReadAsync(reader, token).ConfigureAwait(false))
+                    return fn();
+
+                return default(T);
+            }
+            finally
+            {
+                reader.Dispose();
+            }
+        }
+#endif
+
     }
 }

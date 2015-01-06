@@ -2,6 +2,7 @@
 using System.Collections.Generic;
 using System.Data;
 using System.Linq;
+using System.Threading.Tasks;
 using NUnit.Framework;
 using ServiceStack.DataAnnotations;
 using ServiceStack.OrmLite.Tests.UseCase;
@@ -308,6 +309,9 @@ namespace ServiceStack.OrmLite.Tests.Expression
         [Test]
         public void Can_select_limit_on_Table_with_References()
         {
+            //This version of MariaDB doesn't yet support 'LIMIT & IN/ALL/ANY/SOME subquery'
+            if (Dialect == Dialect.MySql) return;
+
             using (var db = OpenDbConnection())
             {
                 CustomerOrdersUseCase.DropTables(db); //Has conflicting 'Order' table
@@ -350,6 +354,7 @@ namespace ServiceStack.OrmLite.Tests.Expression
         {
             public int Id { get; set; }
             public bool Bool { get; set; }
+            public string Name { get; set; }
         }
 
         public class TableB
@@ -425,6 +430,120 @@ namespace ServiceStack.OrmLite.Tests.Expression
                 rows = db.Select(q);
                 db.GetLastSql().Print();
                 Assert.That(rows.Map(x => x.Id), Is.EqualTo(new[] { 2, 1 }));
+            }
+        }
+
+        [Test]
+        public void Can_find_missing_rows_from_Left_Join_on_int_primary_key()
+        {
+            using (var db = OpenDbConnection())
+            {
+                db.DropAndCreateTable<TableA>();
+                db.DropAndCreateTable<TableB>();
+
+                db.Insert(new TableA { Id = 1, Bool = true, Name = "A" });
+                db.Insert(new TableA { Id = 2, Bool = true, Name = "B" });
+                db.Insert(new TableA { Id = 3, Bool = true, Name = "C" });
+                db.Insert(new TableB { Id = 1, TableAId = 1, Name = "Z" });
+
+                var missingNames = db.Column<string>(
+                    db.From<TableA>()
+                      .LeftJoin<TableB>((a, b) => a.Id == b.Id)
+                      .Where<TableB>(b => b.Id == null)
+                      .Select(a => a.Name));
+
+                Assert.That(missingNames, Is.EquivalentTo(new[] { "B", "C" }));
+            }
+        }
+
+        public class CrossJoinTableA 
+        {
+            public int Id { get; set; }
+            public string Name { get; set; }
+        }
+
+        public class CrossJoinTableB 
+        {
+            public int Id { get; set; }
+            public int Value { get; set; }
+        }
+
+        public class CrossJoinResult 
+        {
+            public int CrossJoinTableAId { get; set; }
+            public string Name { get; set; }
+            public int CrossJoinTableBId { get; set; }
+            public int Value { get; set; }
+
+            public override bool Equals(object obj) 
+            {
+                var other = obj as CrossJoinResult;
+                if(other == null)
+                    return false;
+
+                return CrossJoinTableAId == other.CrossJoinTableAId && string.Equals(Name, other.Name) && CrossJoinTableBId == other.CrossJoinTableBId && Value == other.Value;
+            }
+        }
+
+        [Test]
+        public void Can_perform_a_crossjoin_without_a_join_expression() 
+        {
+            using(var db = OpenDbConnection()) 
+            {
+                db.DropAndCreateTable<CrossJoinTableA>();
+                db.DropAndCreateTable<CrossJoinTableB>();
+
+                db.Insert(new CrossJoinTableA {Id = 1, Name = "Foo"});
+                db.Insert(new CrossJoinTableA {Id = 2, Name = "Bar"});
+                db.Insert(new CrossJoinTableB {Id = 5, Value = 3});
+                db.Insert(new CrossJoinTableB {Id = 6, Value = 42});
+
+                var q = db.From<CrossJoinTableA>()
+                          .CrossJoin<CrossJoinTableB>()
+                          .OrderBy<CrossJoinTableA>(x => x.Id)
+                          .ThenBy<CrossJoinTableB>(x => x.Id);
+                var result = db.Select<CrossJoinResult>(q);
+
+                db.GetLastSql().Print();
+
+                Assert.That(result.Count, Is.EqualTo(4));
+                var expected = new List<CrossJoinResult> 
+                {
+                    new CrossJoinResult { CrossJoinTableAId = 1, Name = "Foo", CrossJoinTableBId = 5, Value = 3 },
+                    new CrossJoinResult { CrossJoinTableAId = 1, Name = "Foo", CrossJoinTableBId = 6, Value = 42 },
+                    new CrossJoinResult { CrossJoinTableAId = 2, Name = "Bar", CrossJoinTableBId = 5, Value = 3},
+                    new CrossJoinResult { CrossJoinTableAId = 2, Name = "Bar", CrossJoinTableBId = 6, Value = 42},
+                };
+                Assert.That(result, Is.EquivalentTo(expected));
+            }
+        }
+
+        [Test]
+        public void Can_perform_a_crossjoin_with_a_join_expression() 
+        {
+            using (var db = OpenDbConnection()) 
+            {
+                db.DropAndCreateTable<CrossJoinTableA>();
+                db.DropAndCreateTable<CrossJoinTableB>();
+
+                db.Insert(new CrossJoinTableA { Id = 1, Name = "Foo" });
+                db.Insert(new CrossJoinTableA { Id = 2, Name = "Bar" });
+                db.Insert(new CrossJoinTableB { Id = 5, Value = 3 });
+                db.Insert(new CrossJoinTableB { Id = 6, Value = 42 });
+                db.Insert(new CrossJoinTableB { Id = 7, Value = 56 });
+
+                var q = db.From<CrossJoinTableA>().CrossJoin<CrossJoinTableB>((a, b) => b.Id > 5 && a.Id < 2).OrderBy<CrossJoinTableA>(x => x.Id).ThenBy<CrossJoinTableB>(x => x.Id);
+                var result = db.Select<CrossJoinResult>(q);
+
+                db.GetLastSql().Print();
+
+                Assert.That(result.Count, Is.EqualTo(2));
+                var expected = new List<CrossJoinResult> 
+                {
+                    new CrossJoinResult { CrossJoinTableAId = 1, Name = "Foo", CrossJoinTableBId = 6, Value = 42 },
+                    new CrossJoinResult { CrossJoinTableAId = 1, Name = "Foo", CrossJoinTableBId = 7, Value = 56 },
+                };
+                Assert.That(result, Is.EquivalentTo(expected));
             }
         }
     }

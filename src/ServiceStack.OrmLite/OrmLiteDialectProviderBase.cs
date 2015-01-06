@@ -15,15 +15,15 @@ using System.Collections.Generic;
 using System.Data;
 using System.Globalization;
 using System.Text;
+using System.Threading;
+using System.Threading.Tasks;
 using ServiceStack.DataAnnotations;
 using ServiceStack.Logging;
 using ServiceStack.Text;
-using System.Diagnostics;
 using System.Linq.Expressions;
 
 namespace ServiceStack.OrmLite
 {
-
     public abstract class OrmLiteDialectProviderBase<TDialect>
         : IOrmLiteDialectProvider
         where TDialect : IOrmLiteDialectProvider
@@ -263,14 +263,12 @@ namespace ServiceStack.OrmLite
                    && fieldDefinition != BoolColumnDefinition;
         }
 
-        protected const int NotFound = -1;
-
         /// <summary>
         /// Populates row fields during re-hydration of results.
         /// </summary>
         public virtual void SetDbValue(FieldDefinition fieldDef, IDataReader reader, int colIndex, object instance)
         {
-            if (HandledDbNullValue(fieldDef, reader, colIndex, instance)) return;
+            if (OrmLiteUtils.HandledDbNullValue(fieldDef, reader, colIndex, instance)) return;
 
             var convertedValue = ConvertDbValue(reader.GetValue(colIndex), fieldDef.FieldType);
             try
@@ -280,24 +278,7 @@ namespace ServiceStack.OrmLite
             catch (NullReferenceException ignore) { }
         }
 
-        public static bool HandledDbNullValue(FieldDefinition fieldDef, IDataReader dataReader, int colIndex, object instance)
-        {
-            if (fieldDef == null || fieldDef.SetValueFn == null || colIndex == NotFound) return true;
-            if (dataReader.IsDBNull(colIndex))
-            {
-                if (fieldDef.IsNullable)
-                {
-                    fieldDef.SetValueFn(instance, null);
-                }
-                else
-                {
-                    fieldDef.SetValueFn(instance, fieldDef.FieldType.GetDefaultValue());
-                }
-                return true;
-            }
-            return false;
-        }
-
+  
         public abstract IDbConnection CreateConnection(string filePath, Dictionary<string, string> options);
 
         public virtual string GetQuotedValue(string paramValue)
@@ -687,6 +668,12 @@ namespace ServiceStack.OrmLite
             return hadRowVesion;
         }
 
+        public virtual void PrepareStoredProcedureStatement<T>(IDbCommand cmd, T obj)
+        {
+            cmd.CommandText = ToExecuteProcedureStatement(obj);
+            cmd.CommandType = CommandType.StoredProcedure;
+        }
+
         protected void AddParameter(IDbCommand cmd, FieldDefinition fieldDef)
         {
             var p = cmd.CreateParameter();
@@ -755,11 +742,11 @@ namespace ServiceStack.OrmLite
                     {
                         return value;
                     }
-                    return OrmLiteConfig.DialectProvider.StringSerializer.SerializeToString(value);
+                    return StringSerializer.SerializeToString(value);
                 }
                 if (fieldDef.FieldType.IsEnum)
                 {
-                    var enumValue = OrmLiteConfig.DialectProvider.StringSerializer.SerializeToString(value);
+                    var enumValue = StringSerializer.SerializeToString(value);
                     if (enumValue == null)
                         return null;
 
@@ -795,7 +782,7 @@ namespace ServiceStack.OrmLite
             if (value == null)
                 return DBNull.Value;
 
-            var unquotedVal = OrmLiteConfig.DialectProvider.GetQuotedValue(value, fieldDef.FieldType)
+            var unquotedVal = GetQuotedValue(value, fieldDef.FieldType)
                 .TrimStart('\'').TrimEnd('\''); ;
 
             if (string.IsNullOrEmpty(unquotedVal))
@@ -1139,11 +1126,6 @@ namespace ServiceStack.OrmLite
             return null;
         }
 
-        public static ModelDefinition GetModelDefinition(Type modelType)
-        {
-            return modelType.GetModelDefinition();
-        }
-
         public virtual string ToAddColumnStatement(Type modelType, FieldDefinition fieldDef)
         {
 
@@ -1259,14 +1241,6 @@ namespace ServiceStack.OrmLite
             }
         }
 
-
-        public static ulong ConvertToULong(byte[] bytes)
-        {
-            Array.Reverse(bytes); //Correct Endianness
-            var ulongValue = BitConverter.ToUInt64(bytes, 0);
-            return ulongValue;
-        }
-
         public virtual object ConvertDbValue(object value, Type type)
         {
             if (value == null || value is DBNull) return null;
@@ -1315,7 +1289,7 @@ namespace ServiceStack.OrmLite
                             return value;
                         var byteValue = value as byte[];
                         if (byteValue != null)
-                            return ConvertToULong(byteValue);
+                            return OrmLiteUtils.ConvertToULong(byteValue);
                         return Convert.ToUInt64(value);
                     case TypeCode.Single:
                         return value is float ? value : Convert.ToSingle(value);
@@ -1334,7 +1308,7 @@ namespace ServiceStack.OrmLite
 
             try
             {
-                var convertedValue = OrmLiteConfig.DialectProvider.StringSerializer.DeserializeFromString(value.ToString(), type);
+                var convertedValue = StringSerializer.DeserializeFromString(value.ToString(), type);
                 return convertedValue;
             }
             catch (Exception)
@@ -1348,10 +1322,9 @@ namespace ServiceStack.OrmLite
         {
             if (value == null) return "NULL";
 
-            var dialectProvider = OrmLiteConfig.DialectProvider;
             if (fieldType.IsRefType())
             {
-                return dialectProvider.GetQuotedValue(dialectProvider.StringSerializer.SerializeToString(value));
+                return GetQuotedValue(StringSerializer.SerializeToString(value));
             }
 
             if (fieldType.IsEnum)
@@ -1363,10 +1336,10 @@ namespace ServiceStack.OrmLite
                     value = Enum.ToObject(fieldType, enumValue).ToString();
                 }
 
-                var enumString = dialectProvider.StringSerializer.SerializeToString(value);
+                var enumString = StringSerializer.SerializeToString(value);
 
                 return !isEnumFlags
-                    ? dialectProvider.GetQuotedValue(enumString.Trim('"'))
+                    ? GetQuotedValue(enumString.Trim('"'))
                     : enumString;
             }
 
@@ -1389,7 +1362,11 @@ namespace ServiceStack.OrmLite
                 case TypeCode.UInt32:
                 case TypeCode.UInt64:
                     if (fieldType.IsNumericType())
+                    {
+                        if (value is TimeSpan)
+                            return ((TimeSpan)value).Ticks.ToString(CultureInfo.InvariantCulture);
                         return Convert.ChangeType(value, fieldType).ToString();
+                    }
                     break;
             }
 
@@ -1397,7 +1374,7 @@ namespace ServiceStack.OrmLite
                 return ((TimeSpan)value).Ticks.ToString(CultureInfo.InvariantCulture);
  
             return ShouldQuoteValue(fieldType)
-                    ? dialectProvider.GetQuotedValue(value.ToString())
+                    ? GetQuotedValue(value.ToString())
                     : value.ToString();
         }
 
@@ -1412,5 +1389,130 @@ namespace ServiceStack.OrmLite
                 .Replace("_", @"^_")
                 .Replace("%", @"^%");
         }
+
+        public virtual string GetLoadChildrenSubSelect<From>(ModelDefinition modelDef, SqlExpression<From> expr)
+        {
+            expr.Select(this.GetQuotedColumnName(modelDef, modelDef.PrimaryKey));
+
+            var subSql = expr.ToSelectStatement();
+
+            return subSql;
+        }
+
+        public virtual string ToRowCountStatement(string innerSql)
+        {
+            return "SELECT COUNT(*) FROM ({0}) AS COUNT".Fmt(innerSql);
+        }
+
+        //Async API's, should be overrided by Dialect Providers to use .ConfigureAwait(false)
+        //Default impl below uses TaskAwaiter shim in async.cs
+
+        public virtual Task OpenAsync(IDbConnection db, CancellationToken token = default(CancellationToken))
+        {
+            db.Open();
+            return TaskResult.Finished;
+        }
+
+        public virtual Task<IDataReader> ExecuteReaderAsync(IDbCommand cmd, CancellationToken token = default(CancellationToken))
+        {
+            return cmd.ExecuteReader().InTask();
+        }
+
+        public virtual Task<int> ExecuteNonQueryAsync(IDbCommand cmd, CancellationToken token = default(CancellationToken))
+        {
+            return cmd.ExecuteNonQuery().InTask();
+        }
+
+        public virtual Task<object> ExecuteScalarAsync(IDbCommand cmd, CancellationToken token = default(CancellationToken))
+        {
+            return cmd.ExecuteScalar().InTask();
+        }
+
+        public virtual Task<bool> ReadAsync(IDataReader reader, CancellationToken token = default(CancellationToken))
+        {
+            return reader.Read().InTask();
+        }
+
+#if NET45
+        public virtual async Task<List<T>> ReaderEach<T>(IDataReader reader, Func<T> fn, CancellationToken token = default(CancellationToken))
+        {
+            try
+            {
+                var to = new List<T>();
+                while (await ReadAsync(reader, token))
+                {
+                    var row = fn();
+                    to.Add(row);
+                }
+                return to;
+            }
+            finally
+            {
+                reader.Dispose();
+            }
+        }
+
+        public virtual async Task<Return> ReaderEach<Return>(IDataReader reader, Action fn, Return source, CancellationToken token = default(CancellationToken))
+        {
+            try
+            {
+                while (await ReadAsync(reader, token))
+                {
+                    fn();
+                }
+                return source;
+            }
+            finally
+            {
+                reader.Dispose();
+            }
+        }
+
+        public virtual async Task<T> ReaderRead<T>(IDataReader reader, Func<T> fn, CancellationToken token = default(CancellationToken))
+        {
+            try
+            {
+                if (await ReadAsync(reader, token))
+                    return fn();
+
+                return default(T);
+            }
+            finally 
+            {
+                reader.Dispose();
+            }
+        }
+
+        public virtual Task<long> InsertAndGetLastInsertIdAsync<T>(IDbCommand dbCmd, CancellationToken token)
+        {
+            if (SelectIdentitySql == null)
+                return new NotImplementedException("Returning last inserted identity is not implemented on this DB Provider.")
+                    .InTask<long>();
+
+            dbCmd.CommandText += "; " + SelectIdentitySql;
+
+            return dbCmd.ExecLongScalarAsync(null, token);
+        }
+#else
+        public Task<List<T>> ReaderEach<T>(IDataReader reader, Func<T> fn, CancellationToken token = new CancellationToken())
+        {
+            throw new NotImplementedException(OrmLiteUtils.AsyncRequiresNet45Error);
+        }
+
+        public Task<Return> ReaderEach<Return>(IDataReader reader, Action fn, Return source, CancellationToken token = new CancellationToken())
+        {
+            throw new NotImplementedException(OrmLiteUtils.AsyncRequiresNet45Error);
+        }
+
+        public Task<T> ReaderRead<T>(IDataReader reader, Func<T> fn, CancellationToken token = new CancellationToken())
+        {
+            throw new NotImplementedException(OrmLiteUtils.AsyncRequiresNet45Error);
+        }
+
+        public Task<long> InsertAndGetLastInsertIdAsync<T>(IDbCommand dbCmd, CancellationToken token)
+        {
+            throw new NotImplementedException(OrmLiteUtils.AsyncRequiresNet45Error);
+        }
+#endif
     }
 }

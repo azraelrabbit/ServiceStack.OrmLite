@@ -60,8 +60,8 @@ namespace ServiceStack.OrmLite.Sqlite
                 var tableName = GetTableName(modelDef);
                 var triggerBody = "UPDATE {0} SET {1} = OLD.{1} + 1 WHERE {2} = NEW.{2};".Fmt(
                     tableName, 
-                    modelDef.RowVersion.FieldName.SqlColumn(), 
-                    modelDef.PrimaryKey.FieldName.SqlColumn());
+                    modelDef.RowVersion.FieldName.SqlColumn(this), 
+                    modelDef.PrimaryKey.FieldName.SqlColumn(this));
 
                 var sql = "CREATE TRIGGER {0} BEFORE UPDATE ON {1} FOR EACH ROW BEGIN {2} END;".Fmt(
                     triggerName, tableName, triggerBody);
@@ -165,7 +165,7 @@ namespace ServiceStack.OrmLite.Sqlite
 
         public override void SetDbValue(FieldDefinition fieldDef, IDataReader reader, int colIndex, object instance)
         {
-            if (HandledDbNullValue(fieldDef, reader, colIndex, instance)) return;
+            if (OrmLiteUtils.HandledDbNullValue(fieldDef, reader, colIndex, instance)) return;
 
             var fieldType = Nullable.GetUnderlyingType(fieldDef.FieldType) ?? fieldDef.FieldType;
             if (fieldType == typeof(Guid))
@@ -218,6 +218,11 @@ namespace ServiceStack.OrmLite.Sqlite
             {
                 var dateTimeOffsetValue = (DateTimeOffset) value;
                 return base.GetQuotedValue(dateTimeOffsetValue.ToString("o"), typeof (string));
+            }
+
+            if (fieldType == typeof(byte[]))
+            {
+                return "x'" + BitConverter.ToString((byte[])value).Replace("-", "") + "'";
             }
 
             return base.GetQuotedValue(value, fieldType);

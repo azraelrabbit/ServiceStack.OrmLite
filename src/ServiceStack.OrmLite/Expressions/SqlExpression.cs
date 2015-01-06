@@ -25,6 +25,7 @@ namespace ServiceStack.OrmLite
 
         private string sep = string.Empty;
         protected bool useFieldName = false;
+        protected bool selectDistinct = false;
         private ModelDefinition modelDef;
         public bool PrefixFieldWithTableName { get; set; }
         public bool WhereStatementWithoutWhereString { get; set; }
@@ -54,6 +55,7 @@ namespace ServiceStack.OrmLite
             to.underlyingExpression = underlyingExpression;
             to.orderByProperties = orderByProperties;
             to.selectExpression = selectExpression;
+            to.selectDistinct = selectDistinct;
             to.fromExpression = fromExpression;
             to.whereExpression = whereExpression;
             to.groupBy = groupBy;
@@ -376,8 +378,8 @@ namespace ServiceStack.OrmLite
             sep = string.Empty;
             useFieldName = true;
             orderByProperties.Clear();
-            var property = Visit(keySelector).ToString();
-            orderByProperties.Add(property + " ASC");
+            var fields = Visit(keySelector).ToString();
+            orderByProperties.Add(fields);
             BuildOrderByClauseInternal();
             return this;
         }
@@ -385,7 +387,7 @@ namespace ServiceStack.OrmLite
         public virtual SqlExpression<T> ThenBy(string orderBy)
         {
             orderBy.SqlVerifyFragment();
-            orderByProperties.Add(orderBy + " ASC");
+            orderByProperties.Add(orderBy);
             BuildOrderByClauseInternal();
             return this;
         }
@@ -404,8 +406,8 @@ namespace ServiceStack.OrmLite
         {
             sep = string.Empty;
             useFieldName = true;
-            var property = Visit(keySelector).ToString();
-            orderByProperties.Add(property + " ASC");
+            var fields = Visit(keySelector).ToString();
+            orderByProperties.Add(fields);
             BuildOrderByClauseInternal();
             return this;
         }
@@ -425,8 +427,11 @@ namespace ServiceStack.OrmLite
             sep = string.Empty;
             useFieldName = true;
             orderByProperties.Clear();
-            var property = Visit(keySelector).ToString();
-            orderByProperties.Add(property + " DESC");
+            var fields = Visit(keySelector).ToString().Split(',');
+            foreach (var field in fields)
+            {
+                orderByProperties.Add(field.Trim() + " DESC");
+            }
             BuildOrderByClauseInternal();
             return this;
         }
@@ -453,8 +458,11 @@ namespace ServiceStack.OrmLite
         {
             sep = string.Empty;
             useFieldName = true;
-            var property = Visit(keySelector).ToString();
-            orderByProperties.Add(property + " DESC");
+            var fields = Visit(keySelector).ToString().Split(',');
+            foreach (var field in fields)
+            {
+                orderByProperties.Add(field.Trim() + " DESC");
+            }
             BuildOrderByClauseInternal();
             return this;
         }
@@ -1095,11 +1103,11 @@ namespace ServiceStack.OrmLite
         {
             if (m.Object != null && m.Object as MethodCallExpression != null)
                 return IsColumnAccess(m.Object as MethodCallExpression);
-
+            
             var exp = m.Object as MemberExpression;
             return exp != null
                 && exp.Expression != null
-                && exp.Expression.Type == typeof(T)
+                && IsJoinedTable(exp.Expression.Type)
                 && exp.Expression.NodeType == ExpressionType.Parameter;
         }
 
@@ -1257,8 +1265,10 @@ namespace ServiceStack.OrmLite
 
         private void BuildSelectExpression(string fields, bool distinct)
         {
+            selectDistinct = distinct;
+
             selectExpression = string.Format("SELECT {0}{1}",
-                (distinct ? "DISTINCT " : ""),
+                (selectDistinct ? "DISTINCT " : ""),
                 (string.IsNullOrEmpty(fields) ?
                     DialectProvider.GetColumnNames(modelDef) :
                     fields));

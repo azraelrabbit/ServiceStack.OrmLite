@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.Data;
 using System.Text;
 using Npgsql;
+using NpgsqlTypes;
 using ServiceStack.Text;
 
 namespace ServiceStack.OrmLite.PostgreSQL
@@ -11,6 +12,8 @@ namespace ServiceStack.OrmLite.PostgreSQL
     {
         public static PostgreSQLDialectProvider Instance = new PostgreSQLDialectProvider();
         const string textColumnDefinition = "text";
+
+        public bool UseReturningForLastInsertId { get; set; }
 
         public PostgreSQLDialectProvider()
         {
@@ -32,6 +35,7 @@ namespace ServiceStack.OrmLite.PostgreSQL
             base.MaxStringColumnDefinition = "TEXT";
             base.InitColumnTypeMap();
             base.SelectIdentitySql = "SELECT LASTVAL()";
+            this.UseReturningForLastInsertId = true;
             this.NamingStrategy = new PostgreSqlNamingStrategy();
             this.StringSerializer = new JsonStringSerializer();
         }
@@ -301,6 +305,88 @@ namespace ServiceStack.OrmLite.PostgreSQL
                 values.Append(base.GetQuotedValue(value, typeof(T)));
             }
             return "ARRAY[" + values + "]";
+        }
+
+        public override long InsertAndGetLastInsertId<T>(IDbCommand dbCmd)
+        {
+            if (SelectIdentitySql == null)
+                throw new NotImplementedException("Returning last inserted identity is not implemented on this DB Provider.");
+
+            if (UseReturningForLastInsertId)
+            {
+                var modelDef = GetModel(typeof(T));
+                var pkName = NamingStrategy.GetColumnName(modelDef.PrimaryKey.FieldName);
+                dbCmd.CommandText += " RETURNING " + pkName;                
+            }
+            else
+            {
+                dbCmd.CommandText += "; " + SelectIdentitySql;
+            }
+
+            return dbCmd.ExecLongScalar();
+        }
+
+        public override void SetParameter(FieldDefinition fieldDef, IDbDataParameter p)
+        {
+            if (fieldDef.CustomFieldDefinition == "json")
+            {
+                p.ParameterName = this.GetParam(SanitizeFieldNameForParamName(fieldDef.FieldName));
+                ((NpgsqlParameter) p).NpgsqlDbType = NpgsqlDbType.Json;
+                return;
+            }
+            if (fieldDef.CustomFieldDefinition == "text[]")
+            {
+                p.ParameterName = this.GetParam(SanitizeFieldNameForParamName(fieldDef.FieldName));
+                ((NpgsqlParameter)p).NpgsqlDbType = NpgsqlDbType.Array | NpgsqlDbType.Text;
+                return;
+            }
+            if (fieldDef.CustomFieldDefinition == "integer[]")
+            {
+                p.ParameterName = this.GetParam(SanitizeFieldNameForParamName(fieldDef.FieldName));
+                ((NpgsqlParameter) p).NpgsqlDbType = NpgsqlDbType.Array | NpgsqlDbType.Integer;
+                return;
+            }
+            if (fieldDef.CustomFieldDefinition == "bigint[]")
+            {
+                p.ParameterName = this.GetParam(SanitizeFieldNameForParamName(fieldDef.FieldName));
+                ((NpgsqlParameter) p).NpgsqlDbType = NpgsqlDbType.Array | NpgsqlDbType.Bigint;
+                return;
+            }
+            base.SetParameter(fieldDef, p);
+        }
+        protected override object GetValue<T>(FieldDefinition fieldDef, object obj)
+        {
+            if (fieldDef.CustomFieldDefinition == "text[]")
+            {
+                return fieldDef.GetValue(obj);
+            }
+            if (fieldDef.CustomFieldDefinition == "integer[]")
+            {
+                return fieldDef.GetValue(obj);
+            }
+            if (fieldDef.CustomFieldDefinition == "bigint[]")
+            {
+                return fieldDef.GetValue(obj);
+            }
+            return base.GetValue<T>(fieldDef, obj);
+        }
+
+        public override void PrepareStoredProcedureStatement<T>(IDbCommand cmd, T obj)
+        {
+            var tableType = obj.GetType();
+            var modelDef = GetModel(tableType);
+
+            cmd.CommandText = GetQuotedTableName(modelDef);
+            cmd.CommandType = CommandType.StoredProcedure;
+
+            foreach (var fieldDef in modelDef.FieldDefinitions)
+            {
+                var p = cmd.CreateParameter();
+                SetParameter(fieldDef, p);
+                cmd.Parameters.Add(p);
+            }
+
+            SetParameterValues<T>(cmd, obj);
         }
     }
 }
